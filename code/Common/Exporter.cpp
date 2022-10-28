@@ -97,6 +97,7 @@ void ExportSceneStep(const char*,IOSystem*, const aiScene*, const ExportProperti
 #ifndef ASSIMP_BUILD_NO_OBJ_EXPORTER
 void ExportSceneObj(const char*,IOSystem*, const aiScene*, const ExportProperties*);
 void ExportSceneObjNoMtl(const char*,IOSystem*, const aiScene*, const ExportProperties*);
+void ExportSceneObjNoMtlAndKeepOrder(const char *, IOSystem *, const aiScene *, const ExportProperties *);
 #endif
 #ifndef ASSIMP_BUILD_NO_STL_EXPORTER
 void ExportSceneSTL(const char*,IOSystem*, const aiScene*, const ExportProperties*);
@@ -163,6 +164,8 @@ static void setupExporterArray(std::vector<Exporter::ExportFormatEntry> &exporte
 			aiProcess_GenSmoothNormals /*| aiProcess_PreTransformVertices */);
 	exporters.emplace_back("objnomtl", "Wavefront OBJ format without material file", "obj", &ExportSceneObjNoMtl,
 			aiProcess_GenSmoothNormals /*| aiProcess_PreTransformVertices */);
+    exporters.emplace_back("objnomtlkeeporder", "Wavefront OBJ format without material file and save vertices by order", "obj", &ExportSceneObjNoMtlAndKeepOrder,
+            aiProcess_GenSmoothNormals /*| aiProcess_PreTransformVertices */);
 #endif
 
 #ifndef ASSIMP_BUILD_NO_STL_EXPORTER

@@ -387,7 +387,7 @@ aiMesh *ObjFileImporter::createTopology(const ObjFile::Model *pModel, const ObjF
     }
 
     // Create mesh vertices
-    createVertexArray(pModel, pData, meshIndex, pMesh.get(), uiIdxCount);
+    createVertexArrayWithOrder(pModel, pData, meshIndex, pMesh.get());
 
     return pMesh.release();
 }
@@ -529,6 +529,137 @@ void ObjFileImporter::createVertexArray(const ObjFile::Model *pModel,
     if (!uvok) {
         delete[] pMesh->mTextureCoords[0];
         pMesh->mTextureCoords[0] = nullptr;
+    }
+}
+
+//  Creates a vertex array
+void ObjFileImporter::createVertexArrayWithOrder(const ObjFile::Model *pModel,
+        const ObjFile::Object *pCurrentObject,
+        unsigned int uiMeshIndex,
+        aiMesh *pMesh) {
+    // Checking preconditions
+    ai_assert(nullptr != pCurrentObject);
+
+    // Break, if no faces are stored in object
+    if (pCurrentObject->m_Meshes.empty())
+        return;
+
+    // Get current mesh
+    ObjFile::Mesh *pObjMesh = pModel->mMeshes[uiMeshIndex];
+    if (nullptr == pObjMesh || pObjMesh->m_uiNumIndices < 1) {
+        return;
+    }
+
+    // Copy vertices, normals and textures into aiMesh instance
+    bool normalsok = true, uvok = true;
+    unsigned int minVIdx = 0, maxVIdx = 0, minNormalIdx = 0, maxNormalIdx = 0, minTexCoordIdx = 0, maxTexCoordIdx = 0;
+    bool hasMinVIdx = false, hasMaxVIdx = false, hasMinNormalIdx = false, hasMaxNormalIdx = false, hasMinTexCoordIdx = false, hasMaxTexCoordIdx = false;
+    for (auto sourceFace : pObjMesh->m_Faces) {
+        // Copy all index arrays
+        for (size_t vertexIndex = 0; vertexIndex < sourceFace->m_vertices.size(); vertexIndex++) {
+            const unsigned int vertex = sourceFace->m_vertices.at(vertexIndex);
+            if (vertex >= pModel->mVertices.size()) {
+                throw DeadlyImportError("OBJ: vertex index out of range");
+            }
+
+            if (!hasMinVIdx || vertex < minVIdx) {
+                minVIdx = vertex;
+                hasMinVIdx = true;
+            }
+            if (!hasMaxVIdx || vertex > maxVIdx) {
+                maxVIdx = vertex;
+                hasMaxVIdx = true;
+            }
+        }
+    }
+    unsigned int outIndex = 0;
+    for (auto sourceFace : pObjMesh->m_Faces) {
+        // Copy all index arrays
+        for (size_t vertexIndex = 0; vertexIndex < sourceFace->m_vertices.size(); vertexIndex++) {
+            const unsigned int vertex = sourceFace->m_vertices.at(vertexIndex);
+            if (vertex >= pModel->mVertices.size()) {
+                throw DeadlyImportError("OBJ: vertex index out of range");
+            }
+
+            // Copy all normals
+            if (normalsok && !pModel->mNormals.empty() && vertexIndex < sourceFace->m_normals.size()) {
+                const unsigned int normal = sourceFace->m_normals.at(vertexIndex);
+                if (normal >= pModel->mNormals.size()) {
+                    normalsok = false;
+                } else {
+                    if (!hasMinNormalIdx || normal < minNormalIdx) {
+                        minNormalIdx = normal;
+                        hasMinNormalIdx = true;
+                    }
+                    if (!hasMaxNormalIdx || normal > maxNormalIdx) {
+                        maxNormalIdx = normal;
+                        hasMaxNormalIdx = true;
+                    }
+                }
+            }
+
+            // Copy all texture coordinates
+            if (uvok && !pModel->mTextureCoord.empty() && vertexIndex < sourceFace->m_texturCoords.size()) {
+                const unsigned int tex = sourceFace->m_texturCoords.at(vertexIndex);
+
+                if (tex >= pModel->mTextureCoord.size()) {
+                    uvok = false;
+                } else {
+                    if (!hasMinTexCoordIdx|| tex < minTexCoordIdx) {
+                        minTexCoordIdx = tex;
+                        hasMinTexCoordIdx = true;
+                    }
+                    if (!hasMaxTexCoordIdx || tex > maxTexCoordIdx) {
+                        maxTexCoordIdx = tex;
+                        hasMaxTexCoordIdx = true;
+                    }
+                }
+            }
+
+            // Get destination face
+            aiFace *pDestFace = &pMesh->mFaces[outIndex];
+            pDestFace->mIndices[vertexIndex] = vertex - minVIdx;
+        }
+        ++outIndex;
+    }
+
+    // Copy vertices of this mesh instance
+    pMesh->mNumVertices = maxVIdx - minVIdx + 1;
+    if (pMesh->mNumVertices == 0) {
+        throw DeadlyImportError("OBJ: no vertices");
+    } else if (pMesh->mNumVertices > AI_MAX_VERTICES) {
+        throw DeadlyImportError("OBJ: Too many vertices");
+    }
+    pMesh->mVertices = new aiVector3D[pMesh->mNumVertices];
+    for (unsigned int vIdx = minVIdx; vIdx <= maxVIdx; ++vIdx) {
+        pMesh->mVertices[vIdx - minVIdx] = pModel->mVertices[vIdx];
+    }
+
+    // Allocate buffer for normal vectors
+    if (normalsok && !pModel->mNormals.empty() && pObjMesh->m_hasNormals) {
+        pMesh->mNormals = new aiVector3D[pMesh->mNumVertices];
+        for (unsigned int vIdx = minNormalIdx; vIdx <= maxNormalIdx; ++vIdx) {
+            pMesh->mNormals[vIdx - minNormalIdx] = pModel->mNormals[vIdx];
+        }
+    }
+
+    // Allocate buffer for vertex-color vectors
+    if (!pModel->mVertexColors.empty()) {
+        pMesh->mColors[0] = new aiColor4D[pMesh->mNumVertices];
+        for (unsigned int vIdx = minVIdx; vIdx <= maxVIdx; ++vIdx) {
+            const aiVector3D &color = pModel->mVertexColors[vIdx];
+            pMesh->mColors[0][vIdx - minVIdx] = aiColor4D(color.x, color.y, color.z, 1.0);
+        }
+    }
+
+    // Allocate buffer for texture coordinates
+    if (uvok && !pModel->mTextureCoord.empty() && pObjMesh->m_uiUVCoordinates[0]) {
+        pMesh->mNumUVComponents[0] = pModel->mTextureCoordDim;
+        pMesh->mTextureCoords[0] = new aiVector3D[pMesh->mNumVertices];
+        for (unsigned int vIdx = minTexCoordIdx; vIdx <= maxTexCoordIdx; ++vIdx) {
+            const aiVector3D &coord3d = pModel->mTextureCoord[vIdx];
+            pMesh->mTextureCoords[0][vIdx - minTexCoordIdx] = aiVector3D(coord3d.x, coord3d.y, coord3d.z);
+        }
     }
 }
 

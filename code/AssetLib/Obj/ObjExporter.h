@@ -63,7 +63,7 @@ namespace Assimp {
 class ObjExporter {
 public:
     /// Constructor for a specific scene to export
-    ObjExporter(const char* filename, const aiScene* pScene, bool noMtl=false);
+    ObjExporter(const char* filename, const aiScene* pScene, bool noMtl=false, bool keepOrder = false);
     ~ObjExporter();
     std::string GetMaterialLibName();
     std::string GetMaterialLibFileName();
@@ -97,10 +97,10 @@ private:
 
     void WriteHeader(std::ostringstream& out);
     void WriteMaterialFile();
-    void WriteGeometryFile(bool noMtl=false);
+    void WriteGeometryFile(bool noMtl = false);
     std::string GetMaterialName(unsigned int index);
     void AddMesh(const aiString& name, const aiMesh* m, const aiMatrix4x4& mat);
-    void AddNode(const aiNode* nd, const aiMatrix4x4& mParent);
+    void AddNode(const aiNode *nd, const aiMatrix4x4 &mParent);
 
 private:
     std::string filename;
@@ -115,6 +115,7 @@ private:
     std::vector<aiColor4D> vc;
     std::vector<vertexData> vp;
     bool useVc;
+    bool mkeepOrder;
 
     struct vertexDataCompare {
         bool operator() ( const vertexData& a, const vertexData& b ) const {
@@ -177,8 +178,32 @@ private:
         };
     };
 
+    template <class T>
+    class indexVector {
+        typedef std::vector<T> dataType;
+        dataType vec;
+
+    public:
+        void moveDatas(std::vector<T>& datas) const {
+            datas = std::move(vec);
+        }
+        int AddData(const T& data) {
+            vec.push_back(data);
+            return (int)vec.size();
+        }
+
+        unsigned int GetLength() const {
+            return (unsigned int)vec.size();
+        }
+        indexVector() {
+            // empty
+        }
+    };
+
     indexMap<aiVector3D, aiVectorCompare> mVnMap, mVtMap;
     indexMap<vertexData, vertexDataCompare> mVpMap;
+    indexVector<aiVector3D> mVn, mVt;
+    indexVector<vertexData> mVp;
     std::vector<MeshInstance> mMeshes;
 
     // this endl() doesn't flush() the stream

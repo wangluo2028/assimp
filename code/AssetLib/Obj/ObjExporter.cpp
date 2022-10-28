@@ -102,8 +102,24 @@ void ExportSceneObjNoMtl(const char* pFile,IOSystem* pIOSystem, const aiScene* p
         }
         outfile->Write( exporter.mOutput.str().c_str(), static_cast<size_t>(exporter.mOutput.tellp()),1);
     }
+}
 
+void ExportSceneObjNoMtlAndKeepOrder(const char *pFile, IOSystem *pIOSystem, const aiScene *pScene, const ExportProperties *) {
+    // invoke the exporter
+    ObjExporter exporter(pFile, pScene, true, true);
 
+    if (exporter.mOutput.fail() || exporter.mOutputMat.fail()) {
+        throw DeadlyExportError("output data creation failed. Most likely the file became too large: " + std::string(pFile));
+    }
+
+    // we're still here - export successfully completed. Write both the main OBJ file and the material script
+    {
+        std::unique_ptr<IOStream> outfile(pIOSystem->Open(pFile, "wt"));
+        if (outfile == nullptr) {
+            throw DeadlyExportError("could not open output .obj file: " + std::string(pFile));
+        }
+        outfile->Write(exporter.mOutput.str().c_str(), static_cast<size_t>(exporter.mOutput.tellp()), 1);
+    }
 }
 
 } // end of namespace Assimp
@@ -111,8 +127,7 @@ void ExportSceneObjNoMtl(const char* pFile,IOSystem* pIOSystem, const aiScene* p
 static const std::string MaterialExt = ".mtl";
 
 // ------------------------------------------------------------------------------------------------
-ObjExporter::ObjExporter(const char* _filename, const aiScene* pScene, bool noMtl)
-: filename(_filename)
+ObjExporter::ObjExporter(const char *_filename, const aiScene *pScene, bool noMtl, bool keepOrder) : filename(_filename)
 , pScene(pScene)
 , vn()
 , vt()
@@ -120,9 +135,7 @@ ObjExporter::ObjExporter(const char* _filename, const aiScene* pScene, bool noMt
 , useVc(false)
 , mVnMap()
 , mVtMap()
-, mVpMap()
-, mMeshes()
-, endl("\n") {
+, mVpMap(), mMeshes(), mkeepOrder(keepOrder), endl("\n") {
     // make sure that all formatting happens using the standard, C locale and not the user's current locale
     const std::locale& l = std::locale("C");
     mOutput.imbue(l);
@@ -265,7 +278,11 @@ void ObjExporter::WriteGeometryFile(bool noMtl) {
     AddNode(pScene->mRootNode, mBase);
 
     // write vertex positions with colors, if any
-    mVpMap.getKeys( vp );
+    if (mkeepOrder) {
+        mVp.moveDatas(vp);
+    } else {
+        mVpMap.getKeys(vp);
+    }
     if ( !useVc ) {
         mOutput << "# " << vp.size() << " vertex positions" << endl;
         for ( const vertexData& v : vp ) {
@@ -280,7 +297,12 @@ void ObjExporter::WriteGeometryFile(bool noMtl) {
     mOutput << endl;
 
     // write uv coordinates
-    mVtMap.getKeys(vt);
+    if (mkeepOrder) {
+        mVt.moveDatas(vt);
+    } else {
+        mVtMap.getKeys(vt);
+    }
+    
     mOutput << "# " << vt.size() << " UV coordinates" << endl;
     for(const aiVector3D& v : vt) {
         mOutput << "vt " << v.x << " " << v.y << " " << v.z << endl;
@@ -288,7 +310,12 @@ void ObjExporter::WriteGeometryFile(bool noMtl) {
     mOutput << endl;
 
     // write vertex normals
-    mVnMap.getKeys(vn);
+    if (mkeepOrder) {
+        mVn.moveDatas(vn);
+    } else {
+        mVnMap.getKeys(vn);
+    }
+    
     mOutput << "# " << vn.size() << " vertex normals" << endl;
     for(const aiVector3D& v : vn) {
         mOutput << "vn " << v.x << " " << v.y << " " << v.z << endl;
@@ -331,6 +358,8 @@ void ObjExporter::WriteGeometryFile(bool noMtl) {
 
 // ------------------------------------------------------------------------------------------------
 void ObjExporter::AddMesh(const aiString& name, const aiMesh* m, const aiMatrix4x4& mat) {
+
+
     mMeshes.emplace_back();
     MeshInstance& mesh = mMeshes.back();
 
@@ -342,6 +371,31 @@ void ObjExporter::AddMesh(const aiString& name, const aiMesh* m, const aiMatrix4
     mesh.matname = GetMaterialName(m->mMaterialIndex);
 
     mesh.faces.resize(m->mNumFaces);
+    unsigned int vpBaseIndex = mVp.GetLength() + 1;
+    unsigned int vnBaseIndex = mVn.GetLength() + 1;
+    unsigned int vtBaseIndex = mVt.GetLength() + 1;
+    for (unsigned int i = 0; i < m->mNumVertices; ++i) {
+        aiVector3D vert = mat * m->mVertices[i];
+        if (nullptr != m->mColors[0]) {
+            aiColor4D col4 = m->mColors[0][i];
+            mVp.AddData({ vert, aiColor3D(col4.r, col4.g, col4.b) });
+        } else {
+            mVp.AddData({ vert, aiColor3D(0, 0, 0) });
+        }
+
+        if (m->mNormals) {
+            aiVector3D norm = aiMatrix3x3(mat) * m->mNormals[i];
+            if (mkeepOrder) {
+                mVn.AddData(norm);
+            }
+        }
+
+        if (m->mTextureCoords[0]) {
+            if (mkeepOrder) {
+                mVt.AddData(m->mTextureCoords[0][i]);
+            }
+        }
+    }
 
     for(unsigned int i = 0; i < m->mNumFaces; ++i) {
         const aiFace& f = m->mFaces[i];
@@ -366,20 +420,36 @@ void ObjExporter::AddMesh(const aiString& name, const aiMesh* m, const aiMatrix4
 
             if ( nullptr != m->mColors[ 0 ] ) {
                 aiColor4D col4 = m->mColors[ 0 ][ idx ];
-                face.indices[a].vp = mVpMap.getIndex({vert, aiColor3D(col4.r, col4.g, col4.b)});
+                if (mkeepOrder) {
+                    face.indices[a].vp = vpBaseIndex + idx;
+                } else {
+                    face.indices[a].vp = mVpMap.getIndex({ vert, aiColor3D(col4.r, col4.g, col4.b) });
+                }
             } else {
-                face.indices[a].vp = mVpMap.getIndex({vert, aiColor3D(0,0,0)});
+                if (mkeepOrder) {
+                    face.indices[a].vp = vpBaseIndex + idx;
+                } else {
+                    face.indices[a].vp = mVpMap.getIndex({ vert, aiColor3D(0, 0, 0) });
+                }
             }
 
             if (m->mNormals) {
                 aiVector3D norm = aiMatrix3x3(mat) * m->mNormals[idx];
-                face.indices[a].vn = mVnMap.getIndex(norm);
+                if (mkeepOrder) {
+                    face.indices[a].vn = vnBaseIndex + idx;
+                } else {
+                    face.indices[a].vn = mVnMap.getIndex(norm);
+                }
             } else {
                 face.indices[a].vn = 0;
             }
 
             if ( m->mTextureCoords[ 0 ] ) {
-                face.indices[a].vt = mVtMap.getIndex(m->mTextureCoords[0][idx]);
+                if (mkeepOrder) {
+                    face.indices[a].vt = vtBaseIndex + idx;
+                } else {
+                    face.indices[a].vt = mVtMap.getIndex(m->mTextureCoords[0][idx]);
+                }
             } else {
                 face.indices[a].vt = 0;
             }
@@ -388,7 +458,7 @@ void ObjExporter::AddMesh(const aiString& name, const aiMesh* m, const aiMatrix4
 }
 
 // ------------------------------------------------------------------------------------------------
-void ObjExporter::AddNode(const aiNode* nd, const aiMatrix4x4& mParent) {
+void ObjExporter::AddNode(const aiNode *nd, const aiMatrix4x4 &mParent) {
     const aiMatrix4x4& mAbs = mParent * nd->mTransformation;
 
     aiMesh *cm( nullptr );

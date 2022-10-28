@@ -94,6 +94,9 @@ protected:
     void createVertexArray(const ObjFile::Model *pModel, const ObjFile::Object *pCurrentObject,
             unsigned int uiMeshIndex, aiMesh *pMesh, unsigned int numIndices);
 
+    void createVertexArrayWithOrder(const ObjFile::Model *pModel, const ObjFile::Object *pCurrentObject,
+            unsigned int uiMeshIndex, aiMesh *pMesh);
+
     //! \brief  Object counter helper method.
     void countObjects(const std::vector<ObjFile::Object *> &rObjects, int &iNumMeshes);
 
