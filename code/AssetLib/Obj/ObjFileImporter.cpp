@@ -552,8 +552,8 @@ void ObjFileImporter::createVertexArrayWithOrder(const ObjFile::Model *pModel,
 
     // Copy vertices, normals and textures into aiMesh instance
     bool normalsok = true, uvok = true;
-    unsigned int minVIdx = 0, maxVIdx = 0, minNormalIdx = 0, maxNormalIdx = 0, minTexCoordIdx = 0, maxTexCoordIdx = 0;
-    bool hasMinVIdx = false, hasMaxVIdx = false, hasMinNormalIdx = false, hasMaxNormalIdx = false, hasMinTexCoordIdx = false, hasMaxTexCoordIdx = false;
+    unsigned int minVIdx = 0, maxVIdx = 0, minTexCoordIdx = 0, maxTexCoordIdx = 0;
+    bool hasMinVIdx = false, hasMaxVIdx = false, hasMinTexCoordIdx = false, hasMaxTexCoordIdx = false;
     for (auto sourceFace : pObjMesh->m_Faces) {
         // Copy all index arrays
         for (size_t vertexIndex = 0; vertexIndex < sourceFace->m_vertices.size(); vertexIndex++) {
@@ -573,6 +573,7 @@ void ObjFileImporter::createVertexArrayWithOrder(const ObjFile::Model *pModel,
         }
     }
     unsigned int outIndex = 0;
+    std::map<unsigned int, std::vector<unsigned int>> vertexNormals;
     for (auto sourceFace : pObjMesh->m_Faces) {
         // Copy all index arrays
         for (size_t vertexIndex = 0; vertexIndex < sourceFace->m_vertices.size(); vertexIndex++) {
@@ -584,17 +585,14 @@ void ObjFileImporter::createVertexArrayWithOrder(const ObjFile::Model *pModel,
             // Copy all normals
             if (normalsok && !pModel->mNormals.empty() && vertexIndex < sourceFace->m_normals.size()) {
                 const unsigned int normal = sourceFace->m_normals.at(vertexIndex);
+                auto iterNormalsFound = vertexNormals.find(vertex);
+                if (iterNormalsFound == vertexNormals.end()) {
+                    std::vector<unsigned int> normals;
+                    iterNormalsFound = vertexNormals.insert(std::make_pair(vertex, normals)).first;
+                }
+                iterNormalsFound->second.push_back(normal);
                 if (normal >= pModel->mNormals.size()) {
                     normalsok = false;
-                } else {
-                    if (!hasMinNormalIdx || normal < minNormalIdx) {
-                        minNormalIdx = normal;
-                        hasMinNormalIdx = true;
-                    }
-                    if (!hasMaxNormalIdx || normal > maxNormalIdx) {
-                        maxNormalIdx = normal;
-                        hasMaxNormalIdx = true;
-                    }
                 }
             }
 
@@ -638,8 +636,17 @@ void ObjFileImporter::createVertexArrayWithOrder(const ObjFile::Model *pModel,
     // Allocate buffer for normal vectors
     if (normalsok && !pModel->mNormals.empty() && pObjMesh->m_hasNormals) {
         pMesh->mNormals = new aiVector3D[pMesh->mNumVertices];
-        for (unsigned int vIdx = minNormalIdx; vIdx <= maxNormalIdx; ++vIdx) {
-            pMesh->mNormals[vIdx - minNormalIdx] = pModel->mNormals[vIdx];
+        for (unsigned int vIdx = 0; vIdx < pMesh->mNumVertices; ++vIdx) {
+            auto iterNormalsFound = vertexNormals.find(vIdx);
+            if (iterNormalsFound == vertexNormals.end()) {
+                continue;
+            }
+            aiVector3D meshNormal(0, 0, 0);
+            for (auto normalIndex : iterNormalsFound->second) {
+                aiVector3D modelNormal = pModel->mNormals[normalIndex];
+                meshNormal += modelNormal.NormalizeSafe();
+            }
+            pMesh->mNormals[vIdx] = meshNormal.NormalizeSafe();
         }
     }
 
